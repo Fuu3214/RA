@@ -60,6 +60,17 @@ def vae():
     return enc_dec
 
 def dsn():
+    def siamese_enc(img, enc, is_training = True):
+
+        z_mu, z_log_sigma_sq = enc(img, is_training=is_training)
+        epsilon = tf.random_normal(tf.shape(z_mu))
+        if is_training:
+            z = z_mu + tf.exp(0.5 * z_log_sigma_sq) * epsilon
+        else:
+            z = z_mu
+
+        return z
+        
 
     def dsn_model(img, enc_d, enc_e, dec_shared, is_training=True):
                 # encode
@@ -84,4 +95,4 @@ def dsn():
 
         return z_d_mu, z_d_log_sigma_sq, z_e_mu, z_e_log_sigma_sq, z_d, z_e, img_rec 
 
-    return dsn_model
+    return dsn_model, siamese_enc

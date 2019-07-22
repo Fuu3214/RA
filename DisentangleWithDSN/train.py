@@ -14,7 +14,7 @@ import pylib
 import tensorflow as tf
 import tflib as tl
 import utils
-import loss_func
+import loss
 
 
 # ==============================================================================
@@ -53,15 +53,19 @@ with open('./output/%s/setting.txt' % experiment_name, 'w') as f:
 
 # dataset and models
 Dataset, img_shape, get_imgs = utils.get_dataset(dataset_name)
-dataset = Dataset(batch_size=batch_size)
+
+dataset = Dataset(batch_size=batch_size, shuffle=True)
+
 dataset_val = Dataset(batch_size=100)
 Enc, Dec = utils.get_models(model_name)
-DSN = utils.get_models("dsn")
+DSN, Enc_S = utils.get_models("dsn")
 
 Enc_D = partial(Enc, z_dim=z_dim_d, name="Enc_D")
 Enc_E = partial(Enc, z_dim=z_dim_e, name="Enc_E")
 Dec = partial(Dec, channels=img_shape[2])
 DSN = partial(DSN, enc_d=Enc_D, enc_e=Enc_E, dec_shared=Dec)
+Enc_S = partial(Enc_S, enc=Enc_E)
+
 
 # ==============================================================================
 # =                                    graph                                   =
@@ -69,20 +73,24 @@ DSN = partial(DSN, enc_d=Enc_D, enc_e=Enc_E, dec_shared=Dec)
 
 # input
 img = tf.placeholder(tf.float32, [None] + img_shape)
+img_2 = tf.placeholder(tf.float32, [None] + img_shape)
+
 z_sample = tf.placeholder(tf.float32, [None, z_dim])
 
 # encode & decode
 z_d_mu, z_d_log_sigma_sq, z_e_mu, z_e_log_sigma_sq, z_d, z_e, img_rec = DSN(img)
+z_s = Enc_S(img_2)
 
 # loss
 rec_loss = tf.losses.mean_squared_error(img, img_rec)
-kld_loss_d = -loss_func.kl_loss(z_d_mu, z_d_log_sigma_sq)
-kld_loss_e = -loss_func.kl_loss(z_e_mu, z_e_log_sigma_sq)
-l_diff = loss_func.difference_loss(z_d, z_e)
+kld_loss_d = -loss.kl_loss(z_d_mu, z_d_log_sigma_sq)
+kld_loss_e = -loss.kl_loss(z_e_mu, z_e_log_sigma_sq)
+l_diff = loss.difference_loss(z_d, z_e)
+l_saimise = loss.mmd_loss(z_e, z_s)
 
 # loss = rec_loss + kld_loss_d * beta1 + kld_loss_e * beta2 + l_diff
 
-loss = 2 * rec_loss + kld_loss_d * 4 + kld_loss_e * 1 + l_diff * 1
+loss = 2 * rec_loss + kld_loss_d * 4 + kld_loss_e * 1 + l_diff * 1 + l_saimise * 1
 
 # otpim
 step = tf.train.AdamOptimizer(learning_rate=lr, beta1=0.5).minimize(loss)
@@ -134,7 +142,7 @@ try:
             img_ipt = get_imgs(batch)
 
             # train D
-            summary_opt, _ = sess.run([summary, step], feed_dict={img: img_ipt})
+            summary_opt, _ = sess.run([summary, step], feed_dict={img: img_ipt, img_2: img_ipt})
             summary_writer.add_summary(summary_opt, it)
 
             # display
