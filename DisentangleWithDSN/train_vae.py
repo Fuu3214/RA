@@ -14,6 +14,7 @@ import pylib
 import tensorflow as tf
 import tflib as tl
 import utils
+import loss
 
 
 # ==============================================================================
@@ -21,10 +22,10 @@ import utils
 # ==============================================================================
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--epoch', dest='epoch', type=int, default=8)
+parser.add_argument('--epoch', dest='epoch', type=int, default=20)
 parser.add_argument('--batch_size', dest='batch_size', type=int, default=64)
 parser.add_argument('--lr', dest='lr', type=float, default=0.0002, help='learning rate')
-parser.add_argument('--z_dim', dest='z_dim', type=int, default=32, help='dimension of latent')
+parser.add_argument('--z_dim', dest='z_dim', type=int, default=64, help='dimension of latent')
 parser.add_argument('--beta', dest='beta', type=float, default=1)
 parser.add_argument('--dataset', dest='dataset_name', default='mnist', choices=['mnist', 'celeba'])
 parser.add_argument('--model', dest='model_name', default='mlp_mnist', choices=['mlp_mnist'])
@@ -53,10 +54,13 @@ dataset = Dataset(batch_size=batch_size)
 dataset_val = Dataset(batch_size=100)
 Enc, Dec = utils.get_models(model_name)
 VAE = utils.get_models("vae")
+TC_EST = utils.get_models("discriminator")
 
 Enc = partial(Enc, z_dim=z_dim)
 Dec = partial(Dec, channels=img_shape[2])
 VAE = partial(VAE, enc=Enc, dec=Dec)
+
+TC_EST = partial(TC_EST)
 
 
 # ==============================================================================
@@ -68,21 +72,31 @@ img = tf.placeholder(tf.float32, [None] + img_shape)
 z_sample = tf.placeholder(tf.float32, [None, z_dim])
 
 # encode & decode
-z_mu, z_log_sigma_sq, img_rec = VAE(img)
+z_mu, z_log_sigma_sq, z, img_rec = VAE(img)
+
+
+lgs, prob = TC_EST(z, name="tc_est")
+z_prm = utils.permute(z)
+_, prob_prm = TC_EST(z_prm, name="tc_est")
 
 # loss
 rec_loss = tf.losses.mean_squared_error(img, img_rec)
 kld_loss = -tf.reduce_mean(0.5 * (1 + z_log_sigma_sq - z_mu**2 - tf.exp(z_log_sigma_sq)))
-loss = rec_loss + kld_loss * beta
+l_tc_dist = loss.tc_disc_loss(prob, prob_prm)
+tc_loss = loss.tc_loss(lgs)
+
+loss = rec_loss + kld_loss * 1 + tc_loss
 
 # otpim
 step = tf.train.AdamOptimizer(learning_rate=lr, beta1=0.5).minimize(loss)
+disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='tc_est')
+disc_step = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(l_tc_dist, var_list=disc_vars)
 
 # summary
 summary = tl.summary({rec_loss: 'rec_loss', kld_loss: 'kld_loss'})
 
 # sample
-_, _, img_rec_sample = VAE(img, is_training=False)
+_, _, _, img_rec_sample = VAE(img, is_training=False)
 img_sample = Dec(z_sample, is_training=False)
 
 
@@ -125,7 +139,7 @@ try:
             img_ipt = get_imgs(batch)
 
             # train D
-            summary_opt, _ = sess.run([summary, step], feed_dict={img: img_ipt})
+            summary_opt, _, _ = sess.run([summary, step, disc_step], feed_dict={img: img_ipt})
             summary_writer.add_summary(summary_opt, it)
 
             # display

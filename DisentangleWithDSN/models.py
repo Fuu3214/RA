@@ -55,7 +55,7 @@ def vae():
         # decode
         img_rec = dec(z, is_training=is_training)
 
-        return z_mu, z_log_sigma_sq, img_rec 
+        return z_mu, z_log_sigma_sq, z, img_rec 
 
     return enc_dec
 
@@ -96,3 +96,17 @@ def dsn():
         return z_d_mu, z_d_log_sigma_sq, z_e_mu, z_e_log_sigma_sq, z_d, z_e, img_rec 
 
     return dsn_model, siamese_enc
+
+def discriminator():
+
+    def tc_est(z, dim=128, name="tc_est"):
+        with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+            fc_lrelu = partial(fc, activation_fn=lrelu)
+            y = fc_lrelu(z, dim)
+            y = fc_lrelu(y, dim)
+            logits = fc(y, 2)
+            probabilities = tf.nn.softmax(logits)
+
+        return logits, probabilities
+
+    return tc_est

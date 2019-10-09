@@ -103,3 +103,12 @@ def compute_pairwise_distances(x, y):
   # The resulting dist will be of shape num_y_samples x num_x_samples.
   # and thus we need to transpose it again.
   return tf.transpose(norm(tf.expand_dims(x, 2) - tf.transpose(y)))
+
+
+def permute(z_samples):
+  real_samples = z_samples
+  permuted_rows = []
+  for i in range(real_samples.get_shape()[1]):
+    permuted_rows.append(tf.random_shuffle(real_samples[:, i]))
+    permuted_samples = tf.stack(permuted_rows, axis=1)
+  return permuted_samples

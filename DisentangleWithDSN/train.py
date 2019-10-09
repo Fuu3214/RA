@@ -25,8 +25,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--epoch', dest='epoch', type=int, default=50)
 parser.add_argument('--batch_size', dest='batch_size', type=int, default=64)
 parser.add_argument('--lr', dest='lr', type=float, default=0.0002, help='learning rate')
-parser.add_argument('--z_dim_d', dest='z_dim_d', type=int, default=16, help='dimension of latent')
-parser.add_argument('--z_dim_e', dest='z_dim_e', type=int, default=32, help='dimension of latent')
+parser.add_argument('--z_dim_d', dest='z_dim_d', type=int, default=32, help='dimension of latent')
+parser.add_argument('--z_dim_e', dest='z_dim_e', type=int, default=16, help='dimension of latent')
 parser.add_argument('--beta', dest='beta', type=float, default=1)
 parser.add_argument('--dataset', dest='dataset_name', default='mnist', choices=['mnist', 'celeba'])
 parser.add_argument('--model', dest='model_name', default='mlp_mnist', choices=['mlp_mnist'])
@@ -59,6 +59,7 @@ dataset = Dataset(batch_size=batch_size, shuffle=True)
 dataset_val = Dataset(batch_size=100)
 Enc, Dec = utils.get_models(model_name)
 DSN, Enc_S = utils.get_models("dsn")
+TC_EST = utils.get_models("discriminator")
 
 Enc_D = partial(Enc, z_dim=z_dim_d, name="Enc_D")
 Enc_E = partial(Enc, z_dim=z_dim_e, name="Enc_E")
@@ -66,6 +67,7 @@ Dec = partial(Dec, channels=img_shape[2])
 DSN = partial(DSN, enc_d=Enc_D, enc_e=Enc_E, dec_shared=Dec)
 Enc_S = partial(Enc_S, enc=Enc_E)
 
+TC_EST = partial(TC_EST)
 
 # ==============================================================================
 # =                                    graph                                   =
@@ -73,7 +75,8 @@ Enc_S = partial(Enc_S, enc=Enc_E)
 
 # input
 img = tf.placeholder(tf.float32, [None] + img_shape)
-img_2 = tf.placeholder(tf.float32, [None] + img_shape)
+with tf.control_dependencies([img]):
+    img_2 = tf.random.shuffle(tf.identity(img))
 
 z_sample = tf.placeholder(tf.float32, [None, z_dim])
 
@@ -81,19 +84,29 @@ z_sample = tf.placeholder(tf.float32, [None, z_dim])
 z_d_mu, z_d_log_sigma_sq, z_e_mu, z_e_log_sigma_sq, z_d, z_e, img_rec = DSN(img)
 z_s = Enc_S(img_2)
 
+lgs, prob = TC_EST(z_d, name="tc_est")
+z_prm = utils.permute(z_d)
+_, prob_prm = TC_EST(z_prm, name="tc_est")
+
+
 # loss
 rec_loss = tf.losses.mean_squared_error(img, img_rec)
 kld_loss_d = -loss.kl_loss(z_d_mu, z_d_log_sigma_sq)
 kld_loss_e = -loss.kl_loss(z_e_mu, z_e_log_sigma_sq)
 l_diff = loss.difference_loss(z_d, z_e)
 l_saimise = loss.mmd_loss(z_e, z_s)
+l_tc_dist = loss.tc_disc_loss(prob, prob_prm)
+tc_loss_d = loss.tc_loss(lgs)
 
 # loss = rec_loss + kld_loss_d * beta1 + kld_loss_e * beta2 + l_diff
 
-loss = 2 * rec_loss + kld_loss_d * 4 + kld_loss_e * 1 + l_diff * 1 + l_saimise * 1
+loss = 2 * rec_loss + kld_loss_d * 1  + kld_loss_e * 1 + 1 * tc_loss_d
 
 # otpim
 step = tf.train.AdamOptimizer(learning_rate=lr, beta1=0.5).minimize(loss)
+
+disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='tc_est')
+disc_step = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(l_tc_dist, var_list=disc_vars)
 
 # summary
 summary = tl.summary({rec_loss: 'rec_loss', kld_loss_d: 'kld_loss_d', kld_loss_e: 'kld_loss_e', l_diff: 'l_diff' })
@@ -127,7 +140,9 @@ except:
 # train
 try:
     img_ipt_sample = get_imgs(dataset_val.get_next())
-    z_ipt_sample = np.random.normal(size=[100, z_dim])
+    
+    z_ipt_e = np.random.normal(size=[100, z_dim_e])
+
 
     it = -1
     for ep in range(epoch):
@@ -142,7 +157,7 @@ try:
             img_ipt = get_imgs(batch)
 
             # train D
-            summary_opt, _ = sess.run([summary, step], feed_dict={img: img_ipt, img_2: img_ipt})
+            summary_opt, _ = sess.run([summary, step, disc_step], feed_dict={img: img_ipt})
             summary_writer.add_summary(summary_opt, it)
 
             # display
@@ -154,9 +169,12 @@ try:
                 save_dir = './output/%s/sample_training' % experiment_name
                 pylib.mkdir(save_dir)
 
+                z_ipt_d = np.random.normal(size=[100, z_dim_d])
+                z_ipt = np.concatenate((z_ipt_d, z_ipt_e), axis=1)
+
                 img_rec_opt_sample = sess.run(img_rec_sample, feed_dict={img: img_ipt_sample})
                 ipt_rec = np.concatenate((img_ipt_sample, img_rec_opt_sample), axis=2).squeeze()
-                img_opt_sample = sess.run(img_sample, feed_dict={z_sample: z_ipt_sample}).squeeze()
+                img_opt_sample = sess.run(img_sample, feed_dict={z_sample: z_ipt}).squeeze()
 
                 im.imwrite(im.immerge(ipt_rec, padding=img_shape[0] // 8), '%s/Epoch_(%d)_(%dof%d)_img_rec.jpg' % (save_dir, ep, it_in_epoch, it_per_epoch))
                 im.imwrite(im.immerge(img_opt_sample), '%s/Epoch_(%d)_(%dof%d)_img_sample.jpg' % (save_dir, ep, it_in_epoch, it_per_epoch))

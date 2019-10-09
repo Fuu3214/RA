@@ -86,3 +86,13 @@ def maximum_mean_discrepancy(x, y, kernel=utils.gaussian_kernel_matrix):
     # We do not allow the loss to become negative.
     cost = tf.where(cost > 0, cost, 0, name='value')
   return cost
+
+def tc_disc_loss(probs_real, probs_permuted):
+  return tf.add(0.5 * tf.reduce_mean(tf.log(probs_real[:, 0])), 0.5 * tf.reduce_mean(tf.log(probs_permuted[:, 1])), name="disc_loss")
+
+
+def tc_loss(logits_real):
+  logit_t = logits_real[:, 0]
+  logit_f = logits_real[:, 1]
+  tc_estimate = tf.reduce_mean(logit_t - logit_f, axis=0)
+  return tc_estimate
